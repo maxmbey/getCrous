@@ -4,6 +4,9 @@ import time
 import json
 import os
 import random
+import tempfile
+import uuid
+import shutil
 from typing import List, Set
 
 import telepot
@@ -103,6 +106,11 @@ def create_driver(headless: bool = True) -> webdriver.Chrome:
     else:
         logger.info("Running in non-headless mode")
 
+    # Créer un répertoire temporaire unique pour le profil Chrome
+    temp_dir = tempfile.mkdtemp(prefix=f"chrome_profile_{uuid.uuid4().hex[:8]}_")
+    chrome_options.add_argument(f"--user-data-dir={temp_dir}")
+    logger.info(f"Utilisation du profil Chrome temporaire : {temp_dir}")
+
     # Randomiser l'User-Agent pour éviter la détection
     user_agents = [
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -114,18 +122,50 @@ def create_driver(headless: bool = True) -> webdriver.Chrome:
 
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-extensions")
+    chrome_options.add_argument("--disable-plugins")
+    chrome_options.add_argument("--no-first-run")
+    chrome_options.add_argument("--disable-default-apps")
+    
     # Ajouter des options anti-détection
     chrome_options.add_argument("--disable-blink-features=AutomationControlled")
     chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
     chrome_options.add_experimental_option('useAutomationExtension', False)
 
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=chrome_options)
-    
-    # Masquer les traces de webdriver
-    driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-    
-    return driver
+    try:
+        service = Service(ChromeDriverManager().install())
+        driver = webdriver.Chrome(service=service, options=chrome_options)
+        
+        # Masquer les traces de webdriver
+        driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        
+        # Stocker le chemin du profil temporaire pour le nettoyage
+        driver._temp_profile_dir = temp_dir
+        
+        return driver
+        
+    except Exception as e:
+        # Nettoyer le répertoire temporaire en cas d'erreur
+        try:
+            shutil.rmtree(temp_dir)
+            logger.info(f"Répertoire temporaire nettoyé : {temp_dir}")
+        except:
+            pass
+        raise e
+
+def cleanup_driver(driver: webdriver.Chrome) -> None:
+    """Ferme proprement le driver et nettoie le profil temporaire"""
+    try:
+        temp_dir = getattr(driver, '_temp_profile_dir', None)
+        driver.quit()
+        
+        # Nettoyer le répertoire temporaire
+        if temp_dir and os.path.exists(temp_dir):
+            time.sleep(1)  # Attendre un peu pour que Chrome libère les fichiers
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            logger.info(f"Répertoire temporaire nettoyé : {temp_dir}")
+    except Exception as e:
+        logger.warning(f"Erreur lors du nettoyage du driver : {e}")
 
 def random_sleep(base_delay: float, variance_percent: float = 0.3) -> None:
     """Sleep avec une variation aléatoire pour simuler un comportement humain"""
@@ -179,9 +219,9 @@ def process_users_optimized(driver, parser_obj, notification_builder, notifier, 
                 
                 # CAS 1: Aucun logement disponible
                 if not search_results.accommodations:
-                    logger.info(f"⌀ Aucun logement disponible pour {user_conf.conf_title}")
+                    logger.info(f"❌ Aucun logement disponible pour {user_conf.conf_title}")
                     notifier.send_notifications(user_conf.telegram_id, [
-                        Notification(message="⌀ Aucun logement disponible actuellement.")
+                        Notification(message="❌ Aucun logement disponible actuellement.")
                     ])
                 
                 # CAS 2: Il y a des nouveaux logements
@@ -281,6 +321,7 @@ def main_loop(reset_data: bool = False):
     loop_count = 0
 
     while True:
+        driver = None  # Initialiser à None
         try:
             loop_count += 1
             logger.info(f"🔄 Début du cycle {loop_count}")
@@ -304,13 +345,22 @@ def main_loop(reset_data: bool = False):
             process_users_optimized(driver, parser_obj, notification_builder, notifier, user_confs, seen_ids, id_to_name)
 
             save_seen_ids(seen_ids)
-            driver.quit()
+            cleanup_driver(driver)  # Utiliser la nouvelle fonction
+            driver = None  # Réinitialiser pour éviter le double nettoyage
             
             # Petit délai après fermeture du driver
             random_sleep(2, 0.3)
             
         except Exception as e:
             logger.error(f"Erreur pendant le scraping : {e}")
+            
+            # S'assurer que le driver est fermé même en cas d'erreur
+            if driver is not None:
+                try:
+                    cleanup_driver(driver)
+                except Exception as cleanup_error:
+                    logger.warning(f"Erreur lors du nettoyage du driver : {cleanup_error}")
+            
             # Délai plus long en cas d'erreur pour éviter de spam
             error_delay = random.uniform(30, 60)
             logger.info(f"⚠️ Attente de {error_delay:.1f}s après erreur")
@@ -343,26 +393,40 @@ if __name__ == "__main__":
     if args.loop:
         main_loop(reset_data=args.reset)
     else:
-        # Délai aléatoire initial même en mode one-shot
-        initial_delay = random.uniform(1, 4)
-        logger.info(f"⏱️ Délai initial aléatoire: {initial_delay:.1f}s")
-        time.sleep(initial_delay)
-        
-        driver = create_driver(headless=not args.no_headless)
-        Authenticator(settings.MSE_EMAIL, settings.MSE_PASSWORD).authenticate_driver(driver)
-        
-        random_sleep(5, 0.4)  # Augmenté de 2 à 5
-        
-        parser_obj = Parser(driver)
-        notification_builder = NotificationBuilder()
-        notifier = TelegramNotifier(telepot.Bot(token=settings.TELEGRAM_BOT_TOKEN))
+        driver = None  # Initialiser à None
+        try:
+            # Délai aléatoire initial même en mode one-shot
+            initial_delay = random.uniform(1, 4)
+            logger.info(f"⏱️ Délai initial aléatoire: {initial_delay:.1f}s")
+            time.sleep(initial_delay)
+            
+            driver = create_driver(headless=not args.no_headless)
+            Authenticator(settings.MSE_EMAIL, settings.MSE_PASSWORD).authenticate_driver(driver)
+            
+            random_sleep(5, 0.4)  # Augmenté de 2 à 5
+            
+            parser_obj = Parser(driver)
+            notification_builder = NotificationBuilder()
+            notifier = TelegramNotifier(telepot.Bot(token=settings.TELEGRAM_BOT_TOKEN))
 
-        user_confs = load_users_conf()
-        seen_ids = load_seen_ids(reset=args.reset)
-        id_to_name = {}
+            user_confs = load_users_conf()
+            seen_ids = load_seen_ids(reset=args.reset)
+            id_to_name = {}
 
-        # 🚀 NOUVELLE LOGIQUE OPTIMISÉE CORRIGÉE (mode one-shot)
-        process_users_optimized(driver, parser_obj, notification_builder, notifier, user_confs, seen_ids, id_to_name)
+            # 🚀 NOUVELLE LOGIQUE OPTIMISÉE CORRIGÉE (mode one-shot)
+            process_users_optimized(driver, parser_obj, notification_builder, notifier, user_confs, seen_ids, id_to_name)
 
-        save_seen_ids(seen_ids)
-        driver.quit()
+            save_seen_ids(seen_ids)
+            cleanup_driver(driver)  # Utiliser la nouvelle fonction
+            
+        except Exception as e:
+            logger.error(f"Erreur pendant l'exécution : {e}")
+            
+            # S'assurer que le driver est fermé même en cas d'erreur
+            if driver is not None:
+                try:
+                    cleanup_driver(driver)
+                except Exception as cleanup_error:
+                    logger.warning(f"Erreur lors du nettoyage du driver : {cleanup_error}")
+            
+            raise e
