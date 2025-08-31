@@ -32,26 +32,132 @@ class Authenticator:
         # Step 1: Go to the login page
         logger.info(f"Going to the login page: {settings.MSE_LOGIN_URL}")
         driver.get(settings.MSE_LOGIN_URL)
-        sleep(self.delay)
+        sleep(self.delay * 2)  # Augmenter le délai initial
 
-        # Step 2: Click on "Connexion"
+        # Debug: Afficher le titre de la page et une partie du contenu
+        logger.info(f"Page title: {driver.title}")
+        logger.info(f"Current URL: {driver.current_url}")
+        
+        # Vérifier si on est déjà redirigé
+        if "trouverunlogement" in driver.current_url:
+            logger.info("Déjà connecté ou redirigé vers le site de logement")
+            return
+
+        # Step 2: Try multiple selectors for "Connexion"
+        logger.info("Looking for Connexion link")
+        wait = WebDriverWait(driver, 15)
+        
+        connexion_selectors = [
+            (By.LINK_TEXT, "Connexion"),
+            (By.PARTIAL_LINK_TEXT, "Connexion"),
+            (By.XPATH, "//a[contains(text(), 'Connexion')]"),
+            (By.XPATH, "//a[contains(@href, 'login') or contains(@href, 'connexion')]"),
+            (By.CSS_SELECTOR, "a[href*='login']"),
+            (By.CSS_SELECTOR, ".btn-connexion"),
+            (By.ID, "connexion"),
+            (By.CLASS_NAME, "connexion")
+        ]
+        
+        connexion_element = None
+        for by, selector in connexion_selectors:
+            try:
+                logger.info(f"Trying selector: {by} = '{selector}'")
+                connexion_element = wait.until(EC.element_to_be_clickable((by, selector)))
+                logger.info(f"Found connexion element with: {by} = '{selector}'")
+                break
+            except TimeoutException:
+                logger.debug(f"Selector failed: {by} = '{selector}'")
+                continue
+        
+        if not connexion_element:
+            # Debug: Sauvegarder le HTML pour inspection
+            html_content = driver.page_source
+            logger.error("No connexion element found. Saving page source for debug...")
+            with open("/tmp/debug_page.html", "w", encoding="utf-8") as f:
+                f.write(html_content)
+            logger.error("Page source saved to /tmp/debug_page.html")
+            
+            # Chercher tous les liens disponibles
+            all_links = driver.find_elements(By.TAG_NAME, "a")
+            logger.error("Available links on page:")
+            for i, link in enumerate(all_links[:10]):  # Limiter à 10 liens
+                try:
+                    text = link.text.strip()
+                    href = link.get_attribute("href")
+                    if text or href:
+                        logger.error(f"Link {i}: text='{text}', href='{href}'")
+                except Exception as e:
+                    logger.error(f"Error reading link {i}: {e}")
+            
+            raise Exception("Could not find connexion link with any selector")
+
+        # Click on connexion
         logger.info("Clicking Connexion link")
-        connexion_link = driver.find_element(By.LINK_TEXT, "Connexion")
-        driver.execute_script("arguments[0].click();", connexion_link)
+        driver.execute_script("arguments[0].click();", connexion_element)
         sleep(self.delay)
 
-        # Step 2.5: Choose Messervices (logo)
+        # Step 2.5: Choose Messervices (logo) with multiple selectors
         logger.info("Choosing Messervices login")
-        mse_connect_button = driver.find_element(By.CLASS_NAME, "logo-mse-connect-fr")
-        driver.execute_script("arguments[0].click();", mse_connect_button)
+        
+        mse_selectors = [
+            (By.CLASS_NAME, "logo-mse-connect-fr"),
+            (By.CSS_SELECTOR, ".logo-mse-connect-fr"),
+            (By.XPATH, "//img[contains(@class, 'logo-mse')]"),
+            (By.XPATH, "//button[contains(@class, 'mse') or contains(@title, 'messervices')]"),
+            (By.CSS_SELECTOR, "img[src*='messervices']"),
+        ]
+        
+        mse_element = None
+        for by, selector in mse_selectors:
+            try:
+                logger.info(f"Trying MSE selector: {by} = '{selector}'")
+                mse_element = wait.until(EC.element_to_be_clickable((by, selector)))
+                logger.info(f"Found MSE element with: {by} = '{selector}'")
+                break
+            except TimeoutException:
+                logger.debug(f"MSE selector failed: {by} = '{selector}'")
+                continue
+        
+        if not mse_element:
+            logger.error("Could not find MSE connect button")
+            # Debug: chercher tous les éléments avec 'mse' dans le nom
+            mse_elements = driver.find_elements(By.XPATH, "//*[contains(@class, 'mse') or contains(text(), 'messervices')]")
+            logger.error(f"Found {len(mse_elements)} elements containing 'mse':")
+            for elem in mse_elements:
+                try:
+                    logger.error(f"MSE element: tag={elem.tag_name}, class={elem.get_attribute('class')}, text={elem.text}")
+                except:
+                    pass
+            raise Exception("Could not find MSE connect button")
+        
+        driver.execute_script("arguments[0].click();", mse_element)
         sleep(self.delay)
 
         # Step 3: Input credentials and submit
         logger.info("Inputting credentials")
-        username_input = driver.find_element(By.ID, "login_login")
-        password_input = driver.find_element(By.ID, "login_password")
+        
+        # Attendre que les champs soient disponibles
+        try:
+            username_input = wait.until(EC.presence_of_element_located((By.ID, "login_login")))
+            password_input = wait.until(EC.presence_of_element_located((By.ID, "login_password")))
+        except TimeoutException:
+            logger.error("Could not find login form fields")
+            # Debug: chercher des champs de formulaire
+            inputs = driver.find_elements(By.TAG_NAME, "input")
+            logger.error(f"Found {len(inputs)} input fields:")
+            for i, inp in enumerate(inputs):
+                try:
+                    input_type = inp.get_attribute("type")
+                    input_name = inp.get_attribute("name")
+                    input_id = inp.get_attribute("id")
+                    logger.error(f"Input {i}: type={input_type}, name={input_name}, id={input_id}")
+                except:
+                    pass
+            raise Exception("Could not find login form fields")
 
+        username_input.clear()
         username_input.send_keys(self.email)
+        password_input.clear()
         password_input.send_keys(self.password)
 
         logger.info("Submitting the form")
@@ -63,7 +169,11 @@ class Authenticator:
         self._validate_rules(driver)
 
         # Step 5: Force update the auth status
-        driver.get("https://trouverunlogement.lescrous.fr/mse/discovery/connect")
+        try:
+            driver.get("https://trouverunlogement.lescrous.fr/mse/discovery/connect")
+            sleep(3)
+        except Exception as e:
+            logger.warning(f"Could not navigate to discovery connect: {e}")
 
         # Done
         logger.info("Successfully authenticated to the CROUS website")
