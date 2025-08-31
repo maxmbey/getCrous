@@ -4,7 +4,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
+from selenium.common.exceptions import TimeoutException, NoSuchElementException, UnexpectedAlertPresentException
 from time import sleep
 
 from src.settings import Settings
@@ -166,16 +166,35 @@ class Authenticator:
         # Attendre que la redirection se fasse complètement
         logger.info("Attente de la redirection complète...")
         sleep(8)
+        
+        # Gérer les éventuelles alertes de vérification
+        self._handle_verification_alert(driver)
 
         # Étapes de navigation post-login avec attentes améliorées
         try:
             logger.info("Recherche de l'image 'En résidence'...")
+            # Gérer les alertes avant de chercher l'élément
+            self._handle_verification_alert(driver)
+            
             residence_img = wait.until(
                 EC.element_to_be_clickable((By.CSS_SELECTOR, "img[alt*='En résidence']"))
             )
             driver.execute_script("arguments[0].click();", residence_img)
             sleep(self.delay)
             logger.info("Image 'En résidence' trouvée et cliquée")
+        except UnexpectedAlertPresentException:
+            logger.warning("Alerte de vérification détectée, gestion de l'alerte...")
+            self._handle_verification_alert(driver)
+            # Réessayer après avoir géré l'alerte
+            try:
+                residence_img = wait.until(
+                    EC.element_to_be_clickable((By.CSS_SELECTOR, "img[alt*='En résidence']"))
+                )
+                driver.execute_script("arguments[0].click();", residence_img)
+                sleep(self.delay)
+                logger.info("Image 'En résidence' trouvée et cliquée (après gestion alerte)")
+            except TimeoutException:
+                logger.warning("Image 'En résidence' non trouvée après gestion de l'alerte")
         except TimeoutException:
             logger.warning("Image 'En résidence' non trouvée dans les 15 secondes")
             # Continuer quand même, peut-être que nous sommes déjà sur la bonne page
@@ -285,5 +304,39 @@ class Authenticator:
                 driver.switch_to.window(windows[-1])
                 logger.info(f"Basculé vers la fenêtre {len(windows)}")
                 sleep(7)  # Attendre que la nouvelle fenêtre se charge
+                
+                # Gérer les alertes éventuelles dans la nouvelle fenêtre
+                self._handle_verification_alert(driver)
         except Exception as e:
             logger.warning(f"Erreur lors du changement de fenêtre: {e}")
+
+    def _handle_verification_alert(self, driver: WebDriver) -> None:
+        """Gère les alertes de vérification qui peuvent apparaître."""
+        try:
+            # Vérifier s'il y a une alerte présente
+            alert = driver.switch_to.alert
+            alert_text = alert.text
+            
+            if "Vérification en cours" in alert_text or "veuillez patienter" in alert_text.lower():
+                logger.info(f"🔄 Alerte de vérification détectée: '{alert_text}'")
+                
+                # Accepter l'alerte pour la fermer
+                alert.accept()
+                logger.info("✅ Alerte de vérification acceptée")
+                
+                # Attendre plus longtemps pour que la vérification se termine
+                sleep(15)
+                logger.info("⏳ Attente supplémentaire de 15s pour la vérification...")
+                
+                # Vérifier s'il y a d'autres alertes en cascade
+                self._handle_verification_alert(driver)
+                
+            else:
+                # Autre type d'alerte, l'accepter quand même
+                logger.warning(f"⚠️ Alerte inattendue détectée: '{alert_text}'")
+                alert.accept()
+                sleep(3)
+                
+        except Exception:
+            # Pas d'alerte présente, c'est normal
+            pass
