@@ -68,5 +68,5 @@ poetry run python main.py --loop --reset
 poetry run python main.py --reset
 ```
 
-loop : faire tourner le script en boucle
-reset : effacer le fichier qui contient les logements déjà visualisés
+- loop : faire tourner le script en boucle
+- reset : effacer le fichier qui contient les logements déjà visualisés
