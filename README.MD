@@ -15,7 +15,7 @@ Les fonctionnalités :
 
 ### Exemple
 
-<img src="docs/img/example_notification.jpg" alt= “” width="400">
+<img src="docs/img/example_notification.png" alt= “” width="400">
 
 ## Pré-requis
 
