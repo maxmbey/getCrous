@@ -7,6 +7,7 @@ import random
 import tempfile
 import uuid
 import shutil
+import sys
 from typing import List, Set
 
 import telepot
@@ -15,7 +16,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 
-from src.authenticator import Authenticator
+from src.authenticator import Authenticator, AuthenticationError
 from src.parser import Parser
 from src.models import UserConf, Notification, SearchResults
 from src.notification_builder import NotificationBuilder
@@ -332,7 +333,19 @@ def main_loop(reset_data: bool = False):
             time.sleep(initial_delay)
             
             driver = create_driver(headless=True)
-            Authenticator(settings.MSE_EMAIL, settings.MSE_PASSWORD).authenticate_driver(driver)
+            
+            # GESTION DE L'ERREUR D'AUTHENTIFICATION CRITIQUE
+            try:
+                Authenticator(settings.MSE_EMAIL, settings.MSE_PASSWORD).authenticate_driver(driver)
+            except AuthenticationError as e:
+                logger.error(f"🚨 Erreur d'authentification critique: {e}")
+                if driver is not None:
+                    try:
+                        cleanup_driver(driver)
+                    except Exception as cleanup_error:
+                        logger.warning(f"Erreur lors du nettoyage du driver : {cleanup_error}")
+                # Arrêter complètement le programme
+                sys.exit(1)
             
             # Petit délai aléatoire après l'authentification
             random_sleep(5, 0.5)  # Augmenté de 3 à 5
@@ -350,6 +363,16 @@ def main_loop(reset_data: bool = False):
             
             # Petit délai après fermeture du driver
             random_sleep(2, 0.3)
+            
+        except AuthenticationError:
+            # Cette exception est déjà gérée plus haut avec sys.exit(1)
+            # Ne devrait pas arriver ici, mais au cas où
+            if driver is not None:
+                try:
+                    cleanup_driver(driver)
+                except Exception as cleanup_error:
+                    logger.warning(f"Erreur lors du nettoyage du driver : {cleanup_error}")
+            sys.exit(1)
             
         except Exception as e:
             logger.error(f"Erreur pendant le scraping : {e}")
@@ -401,7 +424,19 @@ if __name__ == "__main__":
             time.sleep(initial_delay)
             
             driver = create_driver(headless=not args.no_headless)
-            Authenticator(settings.MSE_EMAIL, settings.MSE_PASSWORD).authenticate_driver(driver)
+            
+            # GESTION DE L'ERREUR D'AUTHENTIFICATION CRITIQUE
+            try:
+                Authenticator(settings.MSE_EMAIL, settings.MSE_PASSWORD).authenticate_driver(driver)
+            except AuthenticationError as e:
+                logger.error(f"🚨 Erreur d'authentification critique: {e}")
+                if driver is not None:
+                    try:
+                        cleanup_driver(driver)
+                    except Exception as cleanup_error:
+                        logger.warning(f"Erreur lors du nettoyage du driver : {cleanup_error}")
+                # Arrêter complètement le programme
+                sys.exit(1)
             
             random_sleep(5, 0.4)  # Augmenté de 2 à 5
             
@@ -418,6 +453,16 @@ if __name__ == "__main__":
 
             save_seen_ids(seen_ids)
             cleanup_driver(driver)  # Utiliser la nouvelle fonction
+            
+        except AuthenticationError as e:
+            logger.error(f"🚨 Erreur d'authentification critique: {e}")
+            if driver is not None:
+                try:
+                    cleanup_driver(driver)
+                except Exception as cleanup_error:
+                    logger.warning(f"Erreur lors du nettoyage du driver : {cleanup_error}")
+            # Arrêter complètement le programme
+            sys.exit(1)
             
         except Exception as e:
             logger.error(f"Erreur pendant l'exécution : {e}")
