@@ -261,17 +261,17 @@ class Authenticator:
         # Gérer les fenêtres/onglets
         self._switch_to_latest_window(driver)
 
-        # Sélectionner l'année prochaine
+        # Sélectionner l'année courante
         try:
             logger.info("Recherche du bouton radio année prochaine...")
-            next_year_radio = wait.until(
-                EC.element_to_be_clickable((By.ID, "PeriodField-nextSchoolYear"))
+            current_year_radio = wait.until(
+                EC.element_to_be_clickable((By.ID, "PeriodField-currentSchoolYear"))
             )
-            driver.execute_script("arguments[0].click();", next_year_radio)
+            driver.execute_script("arguments[0].click();", current_year_radio)
             sleep(self.delay)
-            logger.info("Année prochaine sélectionnée")
+            logger.info("Année courante sélectionnée")
         except TimeoutException as e:
-            self._critical_error("Sélection année", "Radio bouton 'PeriodField-nextSchoolYear' non trouvé", e)
+            self._critical_error("Sélection année", "Radio bouton 'PeriodField-currentSchoolYear' non trouvé", e) 
 
         # Remplir le champ ville
         try:
